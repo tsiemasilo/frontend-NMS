@@ -2,11 +2,36 @@ import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Download, Activity, AlertTriangle, Wifi, Zap, Clock } from "lucide-react";
-import { formatDistanceToNow, format } from "date-fns";
-import { useQuery } from "@tanstack/react-query";
-import { api, type Agent, type AgentEvent } from "@/lib/api";
-import { HealthScoreBadge } from "@/components/health-score-badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Separator } from "@/components/ui/separator";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Clock, Activity, Network, Monitor, Wifi, AlertCircle, CheckCircle } from "lucide-react";
+import { mockAgentDetails } from "@/lib/mockData";
+
+interface Agent {
+  id: number;
+  hostname: string;
+  status: string;
+  lastSeen: Date;
+  platform: string;
+  ip: string;
+  userInfo: string;
+  connectionType: string;
+  adapterName: string;
+  adapterStatus: string;
+  allAdapters: Array<{
+    name: string;
+    connectionId: string;
+    type: string;
+    status: string;
+  }>;
+  connectivityDetails: {
+    router: boolean;
+    target: boolean;
+    internet: boolean;
+  };
+}
 
 interface AgentDetailsModalProps {
   agent: Agent | null;
@@ -14,253 +39,296 @@ interface AgentDetailsModalProps {
   onClose: () => void;
 }
 
+interface AgentEvent {
+  id: number;
+  hostname: string;
+  status: string;
+  timestamp: string;
+  platform: string;
+  ip: string;
+  userInfo: string;
+  connectionType: string;
+  adapterName: string;
+  adapterStatus: string;
+  allAdapters: Array<{
+    name: string;
+    connectionId: string;
+    type: string;
+    status: string;
+  }>;
+  connectivityDetails: {
+    router: boolean;
+    target: boolean;
+    internet: boolean;
+  };
+}
+
 export function AgentDetailsModal({ agent, isOpen, onClose }: AgentDetailsModalProps) {
-  const [isExporting, setIsExporting] = useState(false);
+  const [agentDetails, setAgentDetails] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const { data: agentDetails, isLoading, error } = useQuery({
-    queryKey: ['/api/agents', agent?.hostname],
-    queryFn: () => api.getAgent(agent!.hostname),
-    enabled: !!agent?.hostname && isOpen,
-  });
-
-  const handleExport = async () => {
-    if (!agent) return;
-    
-    setIsExporting(true);
-    try {
-      const blob = await api.exportAgentHistory(agent.hostname);
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${agent.hostname.replace(/[^a-z0-9]/gi, '_')}_history.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (error) {
-      console.error('Export failed:', error);
-    } finally {
-      setIsExporting(false);
+  useEffect(() => {
+    if (agent && isOpen) {
+      setIsLoading(true);
+      setError(null);
+      
+      // Simulate loading delay and use mock data
+      setTimeout(() => {
+        setAgentDetails(mockAgentDetails);
+        setIsLoading(false);
+      }, 500);
     }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'connected':
-        return 'bg-emerald-100 text-emerald-700 border-emerald-200';
-      case 'disconnected':
-        return 'bg-red-100 text-red-700 border-red-200';
-      default:
-        return 'bg-gray-100 text-gray-700 border-gray-200';
-    }
-  };
-
-  const getEventIcon = (status: string) => {
-    switch (status) {
-      case 'connected':
-        return 'bg-emerald-500';
-      case 'disconnected':
-        return 'bg-red-500';
-      default:
-        return 'bg-gray-500';
-    }
-  };
+  }, [agent, isOpen]);
 
   if (!agent) return null;
 
+  if (isLoading) {
+    return (
+      <Dialog open={isOpen} onOpenChange={onClose}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Loading Agent Details...</DialogTitle>
+          </DialogHeader>
+          <div className="flex items-center justify-center py-8">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  if (error) {
+    return (
+      <Dialog open={isOpen} onOpenChange={onClose}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Error Loading Agent Details</DialogTitle>
+          </DialogHeader>
+          <div className="text-red-600 text-center py-4">
+            {error}
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Agent Details</DialogTitle>
+          <DialogTitle className="flex items-center space-x-2">
+            <Monitor className="h-5 w-5" />
+            <span>{agent.hostname}</span>
+            <Badge variant={agent.status === 'connected' ? 'default' : 'destructive'}>
+              {agent.status}
+            </Badge>
+          </DialogTitle>
         </DialogHeader>
-        
-        <div className="space-y-6">
-          {/* Debug information */}
-          {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-              <p className="text-red-700 text-sm">Error loading agent details: {error.message}</p>
-            </div>
-          )}
-          
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Hostname</label>
-              <p className="text-sm text-slate-900">{agent?.hostname}</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
-              <Badge variant="outline" className={getStatusColor(agent?.status || 'unknown')}>
-                <div className={`w-2 h-2 rounded-full mr-2 ${getEventIcon(agent?.status || 'unknown')}`}></div>
-                {agent?.status}
-              </Badge>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Platform</label>
-              <p className="text-sm text-slate-900">{agent?.platform || 'Unknown'}</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Last Seen</label>
-              <p className="text-sm text-slate-900">
-                {agent?.lastSeen ? formatDistanceToNow(new Date(agent.lastSeen), { addSuffix: true }) : 'Unknown'}
-              </p>
-            </div>
-            {agent?.username && (
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">User</label>
-                <p className="text-sm text-slate-900">{agent.username}</p>
-              </div>
-            )}
-            {agent?.ip && (
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">IP Address</label>
-                <p className="text-sm text-slate-900 font-mono">{agent.ip}</p>
-              </div>
-            )}
-            {agent?.connectionType && (
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Connection Type</label>
-                <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${
-                    agent.connectionType === 'ethernet' ? 'bg-blue-500' :
-                    agent.connectionType === 'lan' ? 'bg-green-500' :
-                    agent.connectionType === 'wifi' ? 'bg-orange-500' :
-                    'bg-gray-500'
-                  }`}></div>
-                  <p className="text-sm text-slate-900 capitalize">{agent.connectionType}</p>
-                </div>
-              </div>
-            )}
-            {agent?.adapterName && (
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Network Adapter</label>
-                <p className="text-sm text-slate-900">{agent.adapterName}</p>
-              </div>
-            )}
-          </div>
-          
-          {/* Network Health Metrics */}
-          <div className="bg-slate-50 rounded-lg p-4">
-            <h4 className="font-medium text-slate-900 mb-3 flex items-center gap-2">
-              <Zap className="h-4 w-4" />
-              Network Health Metrics
-            </h4>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="text-center">
-                <div className="mb-2">
-                  <HealthScoreBadge score={agent?.healthScore} size="lg" showLabel={false} />
-                </div>
-                <p className="text-xs text-slate-600">Overall Health Score</p>
-              </div>
-              <div className="text-center">
-                <div className="flex items-center justify-center gap-1 mb-2">
-                  <Clock className="h-4 w-4 text-blue-500" />
-                  <span className="text-lg font-semibold text-blue-600">
-                    {agent?.uptimePercentage || 0}%
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600">24h Uptime</p>
-              </div>
-              <div className="text-center">
-                <div className="flex items-center justify-center gap-1 mb-2">
-                  <Wifi className="h-4 w-4 text-green-500" />
-                  <span className="text-lg font-semibold text-green-600">
-                    {agent?.avgResponseTime || 0}ms
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600">Avg Response Time</p>
-              </div>
-            </div>
-          </div>
-          
-          {isLoading && (
-            <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-            </div>
-          )}
-          
-          {agentDetails && (
-            <div>
-              <div className="mb-6 p-4 bg-slate-50 rounded-lg">
-                <h4 className="text-lg font-semibold text-slate-900 mb-2 flex items-center">
-                  <AlertTriangle className="h-5 w-5 mr-2" />
-                  Working Hours Analysis
-                </h4>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <label className="block text-slate-600 mb-1">Today's Disconnections (07:00-17:00)</label>
-                    <p className={`text-lg font-semibold ${
-                      agentDetails.workingHoursDisconnections > 5 
-                        ? 'text-red-600' 
-                        : agentDetails.workingHoursDisconnections > 2
-                        ? 'text-yellow-600'
-                        : 'text-green-600'
-                    }`}>
-                      {agentDetails.workingHoursDisconnections} disconnections
-                    </p>
+
+        <Tabs defaultValue="overview" className="w-full">
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="events">Events</TabsTrigger>
+            <TabsTrigger value="adapters">Adapters</TabsTrigger>
+            <TabsTrigger value="connectivity">Connectivity</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="overview" className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center space-x-2">
+                    <Activity className="h-4 w-4" />
+                    <span>System Information</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-600">Platform:</span>
+                    <span className="text-sm font-medium">{agent.platform}</span>
                   </div>
-                  <div>
-                    <label className="block text-slate-600 mb-1">Status</label>
-                    <Badge variant="outline" className={
-                      agentDetails.workingHoursDisconnections > 5 
-                        ? 'bg-red-50 text-red-700 border-red-200' 
-                        : agentDetails.workingHoursDisconnections > 2
-                        ? 'bg-yellow-50 text-yellow-700 border-yellow-200'
-                        : 'bg-green-50 text-green-700 border-green-200'
-                    }>
-                      {agentDetails.workingHoursDisconnections > 5 
-                        ? 'Frequent Issues' 
-                        : agentDetails.workingHoursDisconnections > 2
-                        ? 'Some Issues'
-                        : 'Stable'
-                      }
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-600">IP Address:</span>
+                    <span className="text-sm font-medium">{agent.ip}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-600">User:</span>
+                    <span className="text-sm font-medium">{agent.userInfo}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-600">Last Seen:</span>
+                    <span className="text-sm font-medium">
+                      {new Date(agent.lastSeen).toLocaleString()}
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center space-x-2">
+                    <Network className="h-4 w-4" />
+                    <span>Network Details</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-600">Connection Type:</span>
+                    <span className="text-sm font-medium">{agent.connectionType}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-600">Adapter:</span>
+                    <span className="text-sm font-medium">{agent.adapterName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-600">Adapter Status:</span>
+                    <Badge variant={agent.adapterStatus === 'connected' ? 'default' : 'destructive'}>
+                      {agent.adapterStatus}
                     </Badge>
                   </div>
-                </div>
-              </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
 
-              <h4 className="text-lg font-semibold text-slate-900 mb-4 flex items-center">
-                <Activity className="h-5 w-5 mr-2" />
-                Recent Activity
-              </h4>
-              <div className="space-y-3 max-h-64 overflow-y-auto">
-                {agentDetails.events.map((event: AgentEvent) => (
-                  <div key={event.id} className="flex items-start space-x-3 p-3 bg-slate-50 rounded-lg">
-                    <div className={`w-2 h-2 rounded-full mt-2 ${getEventIcon(event.status)}`}></div>
-                    <div className="flex-1">
-                      <p className="text-sm text-slate-900 capitalize">{event.status}</p>
-                      <p className="text-xs text-slate-500">
-                        {format(new Date(event.timestamp), 'yyyy-MM-dd HH:mm:ss')}
-                      </p>
-                      {event.duration && (
-                        <p className="text-xs text-slate-400">
-                          Duration: {Math.round(event.duration / 1000)}s
-                        </p>
+          <TabsContent value="events" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Recent Events</CardTitle>
+                <CardDescription>Latest activity from this agent</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-64 w-full">
+                  <div className="space-y-2">
+                    {agentDetails?.events?.map((event: AgentEvent) => (
+                      <div key={event.id} className="flex items-center space-x-3 p-2 rounded-md bg-gray-50">
+                        <div className="flex-shrink-0">
+                          {event.status === 'connected' ? (
+                            <CheckCircle className="h-4 w-4 text-green-500" />
+                          ) : (
+                            <AlertCircle className="h-4 w-4 text-red-500" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center space-x-2">
+                            <Badge variant={event.status === 'connected' ? 'default' : 'destructive'}>
+                              {event.status}
+                            </Badge>
+                            <span className="text-sm text-gray-500">
+                              {new Date(event.timestamp).toLocaleString()}
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-600 truncate">
+                            {event.connectionType} - {event.adapterName}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="adapters" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Network Adapters</CardTitle>
+                <CardDescription>All network adapters detected on this agent</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {agent.allAdapters.map((adapter, index) => (
+                    <div key={index} className="flex items-center justify-between p-2 rounded-md bg-gray-50">
+                      <div className="flex items-center space-x-3">
+                        <Wifi className="h-4 w-4 text-gray-500" />
+                        <div>
+                          <p className="text-sm font-medium">{adapter.name}</p>
+                          <p className="text-xs text-gray-500">{adapter.connectionId}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <Badge variant="outline">{adapter.type}</Badge>
+                        <Badge variant={adapter.status === 'connected' ? 'default' : 'destructive'}>
+                          {adapter.status}
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="connectivity" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Connectivity Test Results</CardTitle>
+                <CardDescription>Latest connectivity test results</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-3 rounded-md bg-gray-50">
+                    <div className="flex items-center space-x-3">
+                      <Network className="h-4 w-4" />
+                      <span className="text-sm font-medium">Router Connection</span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {agent.connectivityDetails.router ? (
+                        <CheckCircle className="h-4 w-4 text-green-500" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 text-red-500" />
                       )}
+                      <span className="text-sm font-medium">
+                        {agent.connectivityDetails.router ? 'Connected' : 'Disconnected'}
+                      </span>
                     </div>
                   </div>
-                ))}
-                
-                {agentDetails.events.length === 0 && (
-                  <p className="text-sm text-slate-500 text-center py-4">No recent activity</p>
-                )}
-              </div>
-            </div>
-          )}
-          
-          <div className="flex space-x-3">
-            <Button 
-              onClick={handleExport} 
-              disabled={isExporting}
-              className="flex-1"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              {isExporting ? 'Exporting...' : 'Export History'}
-            </Button>
-            <Button variant="outline" onClick={onClose} className="flex-1">
-              Close
-            </Button>
-          </div>
+
+                  <div className="flex items-center justify-between p-3 rounded-md bg-gray-50">
+                    <div className="flex items-center space-x-3">
+                      <Monitor className="h-4 w-4" />
+                      <span className="text-sm font-medium">Target Server</span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {agent.connectivityDetails.target ? (
+                        <CheckCircle className="h-4 w-4 text-green-500" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 text-red-500" />
+                      )}
+                      <span className="text-sm font-medium">
+                        {agent.connectivityDetails.target ? 'Reachable' : 'Unreachable'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 rounded-md bg-gray-50">
+                    <div className="flex items-center space-x-3">
+                      <Network className="h-4 w-4" />
+                      <span className="text-sm font-medium">Internet Access</span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {agent.connectivityDetails.internet ? (
+                        <CheckCircle className="h-4 w-4 text-green-500" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 text-red-500" />
+                      )}
+                      <span className="text-sm font-medium">
+                        {agent.connectivityDetails.internet ? 'Available' : 'Unavailable'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+
+        <div className="flex justify-end space-x-2 pt-4">
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
