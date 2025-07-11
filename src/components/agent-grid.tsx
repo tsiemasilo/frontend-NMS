@@ -1,14 +1,36 @@
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Download, Monitor, AlertTriangle } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
-import { useQuery } from "@tanstack/react-query";
-import { api, type Agent } from "@/lib/api";
-import { HealthScoreBadge } from "@/components/health-score-badge";
+import { Monitor, Activity, Download, Search, Filter, Clock } from "lucide-react";
+import { HealthScoreBadge } from "./health-score-badge";
+import { mockAgents } from "@/lib/mockData";
+
+interface Agent {
+  id: number;
+  hostname: string;
+  status: string;
+  lastSeen: Date;
+  platform: string;
+  ip: string;
+  userInfo: string;
+  connectionType: string;
+  adapterName: string;
+  adapterStatus: string;
+  allAdapters: Array<{
+    name: string;
+    connectionId: string;
+    type: string;
+    status: string;
+  }>;
+  connectivityDetails: {
+    router: boolean;
+    target: boolean;
+    internet: boolean;
+  };
+}
 
 interface AgentGridProps {
   agents: Agent[];
@@ -19,206 +41,194 @@ interface AgentGridProps {
 export function AgentGrid({ agents, onAgentClick, onExport }: AgentGridProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [agentDisconnections, setAgentDisconnections] = useState<Record<string, number>>({});
+  const [sortBy, setSortBy] = useState('hostname');
+  const [filteredAgents, setFilteredAgents] = useState<Agent[]>([]);
 
-  // Fetch working hours disconnections for all agents
   useEffect(() => {
-    const fetchDisconnections = async () => {
-      const disconnectionData: Record<string, number> = {};
-      
-      for (const agent of agents) {
-        try {
-          const result = await api.getWorkingHoursDisconnections(agent.hostname);
-          disconnectionData[agent.hostname] = result.disconnections;
-        } catch (error) {
-          console.error(`Failed to fetch disconnections for ${agent.hostname}:`, error);
-          disconnectionData[agent.hostname] = 0;
-        }
+    let filtered = agents;
+
+    // Apply search filter
+    if (searchTerm) {
+      filtered = filtered.filter(agent => 
+        agent.hostname.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        agent.ip.includes(searchTerm) ||
+        agent.userInfo.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    // Apply status filter
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter(agent => agent.status === statusFilter);
+    }
+
+    // Apply sorting
+    filtered.sort((a, b) => {
+      switch (sortBy) {
+        case 'hostname':
+          return a.hostname.localeCompare(b.hostname);
+        case 'status':
+          return a.status.localeCompare(b.status);
+        case 'lastSeen':
+          return new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime();
+        case 'platform':
+          return a.platform.localeCompare(b.platform);
+        default:
+          return 0;
       }
-      
-      setAgentDisconnections(disconnectionData);
-    };
+    });
 
-    if (agents.length > 0) {
-      fetchDisconnections();
-    }
-  }, [agents]);
+    setFilteredAgents(filtered);
+  }, [agents, searchTerm, statusFilter, sortBy]);
 
-  const filteredAgents = agents.filter(agent => {
-    const matchesSearch = agent.hostname.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         agent.username?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         '';
-    const matchesStatus = statusFilter === 'all' || agent.status === statusFilter;
-    
-    return matchesSearch && matchesStatus;
-  });
+  const getTimeSince = (date: Date) => {
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'connected':
-        return 'bg-emerald-100 text-emerald-700 border-emerald-200';
-      case 'disconnected':
-        return 'bg-red-100 text-red-700 border-red-200';
-      default:
-        return 'bg-gray-100 text-gray-700 border-gray-200';
-    }
+    if (days > 0) return `${days}d ago`;
+    if (hours > 0) return `${hours}h ago`;
+    if (minutes > 0) return `${minutes}m ago`;
+    return 'Just now';
   };
 
-  const getStatusIndicator = (status: string) => {
-    switch (status) {
-      case 'connected':
-        return 'bg-emerald-500';
-      case 'disconnected':
-        return 'bg-red-500';
-      default:
-        return 'bg-gray-500';
-    }
-  };
-
-  const getPlatformIcon = (platform?: string) => {
-    return <Monitor className="h-4 w-4" />;
+  const getHealthScore = (agent: Agent) => {
+    // Simple health score calculation based on status and connectivity
+    let score = 0;
+    if (agent.status === 'connected') score += 50;
+    if (agent.connectivityDetails?.router) score += 15;
+    if (agent.connectivityDetails?.target) score += 20;
+    if (agent.connectivityDetails?.internet) score += 15;
+    return Math.min(score, 100);
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle>Agent Status</CardTitle>
-          <div className="flex items-center space-x-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <Input
-                placeholder="Search agents..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10 w-64"
-              />
-            </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-40">
-                <SelectValue placeholder="Filter by status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Agents</SelectItem>
-                <SelectItem value="connected">Connected</SelectItem>
-                <SelectItem value="disconnected">Disconnected</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button onClick={onExport} variant="outline" size="sm">
-              <Download className="h-4 w-4 mr-2" />
-              Export
-            </Button>
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+        <div className="flex flex-col sm:flex-row gap-2 items-center">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              placeholder="Search agents..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10 w-64"
+            />
           </div>
+          
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-32">
+              <Filter className="h-4 w-4 mr-2" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="connected">Connected</SelectItem>
+              <SelectItem value="disconnected">Disconnected</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={sortBy} onValueChange={setSortBy}>
+            <SelectTrigger className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="hostname">Hostname</SelectItem>
+              <SelectItem value="status">Status</SelectItem>
+              <SelectItem value="lastSeen">Last Seen</SelectItem>
+              <SelectItem value="platform">Platform</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
-      </CardHeader>
-      
-      <CardContent>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {filteredAgents.map((agent) => (
-            <div
-              key={agent.id}
-              onClick={() => onAgentClick(agent)}
-              className="border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow cursor-pointer"
-            >
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="font-medium text-slate-900 truncate">
-                  {agent.hostname}
-                  {agent.username && (
-                    <span className="text-slate-500 text-sm ml-1">({agent.username})</span>
-                  )}
-                </h4>
+
+        <div className="flex items-center space-x-2">
+          <Badge variant="outline" className="text-sm">
+            {filteredAgents.length} of {agents.length} agents
+          </Badge>
+          <Button onClick={onExport} variant="outline" size="sm">
+            <Download className="h-4 w-4 mr-2" />
+            Export
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filteredAgents.map((agent) => (
+          <Card 
+            key={agent.id} 
+            className="cursor-pointer hover:shadow-md transition-shadow"
+            onClick={() => onAgentClick(agent)}
+          >
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
+                  <Monitor className="h-5 w-5 text-gray-500" />
+                  <CardTitle className="text-lg">{agent.hostname}</CardTitle>
+                </div>
+                <Badge variant={agent.status === 'connected' ? 'default' : 'destructive'}>
+                  {agent.status}
+                </Badge>
+              </div>
+              <CardDescription className="text-sm">
+                {agent.userInfo} • {agent.ip}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Platform:</span>
+                  <span className="text-sm font-medium">{agent.platform.split(' ')[0]}</span>
+                </div>
+                
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Connection:</span>
+                  <span className="text-sm font-medium capitalize">{agent.connectionType}</span>
+                </div>
+                
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Adapter:</span>
+                  <span className="text-sm font-medium">
+                    {agent.adapterName.length > 20 
+                      ? `${agent.adapterName.substring(0, 20)}...` 
+                      : agent.adapterName}
+                  </span>
+                </div>
+                
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">Health Score:</span>
+                  <HealthScoreBadge score={getHealthScore(agent)} size="sm" />
+                </div>
+                
+                <div className="flex items-center justify-between pt-2 border-t">
+                  <div className="flex items-center space-x-1 text-gray-500">
+                    <Clock className="h-3 w-3" />
+                    <span className="text-xs">{getTimeSince(agent.lastSeen)}</span>
+                  </div>
                   <div className="flex items-center space-x-1">
-                    <div className={`w-2 h-2 rounded-full ${getStatusIndicator(agent.status)}`}></div>
-                    <Badge variant="outline" className={getStatusColor(agent.status)}>
-                      {agent.status}
-                    </Badge>
+                    <Activity className="h-3 w-3 text-gray-500" />
+                    <span className="text-xs text-gray-500">
+                      {agent.allAdapters.length} adapter{agent.allAdapters.length !== 1 ? 's' : ''}
+                    </span>
                   </div>
-                  {agentDisconnections[agent.hostname] !== undefined && (
-                    <Badge 
-                      variant="outline" 
-                      className={`flex items-center space-x-1 ${
-                        agentDisconnections[agent.hostname] > 5 
-                          ? 'bg-red-50 text-red-700 border-red-200' 
-                          : agentDisconnections[agent.hostname] > 2
-                          ? 'bg-yellow-50 text-yellow-700 border-yellow-200'
-                          : 'bg-green-50 text-green-700 border-green-200'
-                      }`}
-                    >
-                      <AlertTriangle className="h-3 w-3" />
-                      <span>{agentDisconnections[agent.hostname]}</span>
-                    </Badge>
-                  )}
                 </div>
               </div>
-              
-              {agentDisconnections[agent.hostname] !== undefined && (
-                <div className="mb-2 text-xs text-slate-500">
-                  Working Hours Disconnections Today (07:00-17:00): {agentDisconnections[agent.hostname]}
-                </div>
-              )}
-              
-              <div className="space-y-2 text-sm text-slate-600">
-                <div className="flex items-center justify-between">
-                  <span>Last Seen:</span>
-                  <span>{formatDistanceToNow(new Date(agent.lastSeen), { addSuffix: true })}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span>Platform:</span>
-                  <div className="flex items-center space-x-1">
-                    {getPlatformIcon(agent.platform)}
-                    <span>{agent.platform || 'Unknown'}</span>
-                  </div>
-                </div>
-                {agent.ip && (
-                  <div className="flex items-center justify-between">
-                    <span>IP Address:</span>
-                    <span className="font-mono text-xs">{agent.ip}</span>
-                  </div>
-                )}
-                {agent.connectionType && (
-                  <div className="flex items-center justify-between">
-                    <span>Connection:</span>
-                    <div className="flex items-center gap-1">
-                      <div className={`w-2 h-2 rounded-full ${
-                        agent.connectionType === 'ethernet' ? 'bg-blue-500' :
-                        agent.connectionType === 'lan' ? 'bg-green-500' :
-                        agent.connectionType === 'wifi' ? 'bg-orange-500' :
-                        'bg-gray-500'
-                      }`}></div>
-                      <span className="capitalize">{agent.connectionType}</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-              
-              {/* Network Health Score */}
-              <div className="mt-3 pt-3 border-t border-slate-100">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-600">Network Health:</span>
-                  <HealthScoreBadge score={agent.healthScore} size="sm" showLabel={false} />
-                </div>
-                {agent.uptimePercentage !== undefined && (
-                  <div className="flex items-center justify-between text-xs text-slate-500 mt-1">
-                    <span>24h Uptime:</span>
-                    <span>{agent.uptimePercentage}%</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {filteredAgents.length === 0 && (
+        <div className="text-center py-8">
+          <Monitor className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-gray-900 mb-2">No agents found</h3>
+          <p className="text-gray-600">
+            {searchTerm || statusFilter !== 'all' 
+              ? 'Try adjusting your search or filter criteria.'
+              : 'No network agents are currently registered.'}
+          </p>
         </div>
-        
-        {filteredAgents.length === 0 && (
-          <div className="text-center py-8 text-slate-500">
-            No agents found matching your criteria.
-          </div>
-        )}
-        
-        <div className="mt-6 flex items-center justify-between text-sm text-slate-600">
-          <p>Showing {filteredAgents.length} of {agents.length} agents</p>
-        </div>
-      </CardContent>
-    </Card>
+      )}
+    </div>
   );
 }
