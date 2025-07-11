@@ -1,17 +1,37 @@
 import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Calendar } from '@/components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { api, type Agent, type AgentEvent } from '@/lib/api';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
-import { CalendarIcon, Clock, Activity, Zap, History, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { format, subDays, startOfDay, endOfDay, differenceInMinutes, isToday, isYesterday } from 'date-fns';
-import { motion } from 'framer-motion';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import { Clock, Activity, TrendingUp, AlertCircle, CheckCircle, RefreshCw } from "lucide-react";
+import { format, subDays, isToday, isYesterday, startOfDay, endOfDay } from "date-fns";
+import { mockAgents, mockTimelineEvents, mockTrendData, mockUptimeSegments } from "@/lib/mockData";
+
+interface Agent {
+  id: number;
+  hostname: string;
+  status: string;
+  lastSeen: Date;
+  platform: string;
+  ip: string;
+  userInfo: string;
+  connectionType: string;
+  adapterName: string;
+  adapterStatus: string;
+  allAdapters: Array<{
+    name: string;
+    connectionId: string;
+    type: string;
+    status: string;
+  }>;
+  connectivityDetails: {
+    router: boolean;
+    target: boolean;
+    internet: boolean;
+  };
+}
 
 interface TimelineEvent {
   id: number;
@@ -42,472 +62,277 @@ interface UptimeSegment {
 }
 
 export function HistoryTimeline() {
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
+  const [trendData, setTrendData] = useState<TrendData[]>([]);
+  const [uptimeSegments, setUptimeSegments] = useState<UptimeSegment[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string>('all');
-  const [timeRange, setTimeRange] = useState<'1d' | '3d' | '7d' | '30d'>('1d');
-  const [viewMode, setViewMode] = useState<'timeline' | 'trends' | 'uptime'>('timeline');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const { data: agents = [] } = useQuery<Agent[]>({
-    queryKey: ['/api/agents'],
-    refetchInterval: 5000,
-  });
+  // Use mock data instead of API calls
+  useEffect(() => {
+    setAgents(mockAgents);
+    setTimelineEvents(mockTimelineEvents);
+    setTrendData(mockTrendData);
+    setUptimeSegments(mockUptimeSegments);
+  }, []);
 
-  // Fetch historical events
-  const { data: timelineEvents = [] } = useQuery({
-    queryKey: ['timeline-events', selectedDate, selectedAgent, timeRange],
-    queryFn: async () => {
-      const events: TimelineEvent[] = [];
-      const targetAgents = selectedAgent === 'all' ? agents : agents.filter(a => a.hostname === selectedAgent);
-      
-      for (const agent of targetAgents) {
-        try {
-          const response = await fetch(`/api/agents/${agent.hostname}/events?date=${format(selectedDate, 'yyyy-MM-dd')}`);
-          if (response.ok) {
-            const agentEvents: AgentEvent[] = await response.json();
-            
-            // Process events and add timeline metadata
-            let lastStatus = 'connected';
-            agentEvents.forEach((event, index) => {
-              const eventTime = new Date(event.timestamp);
-              const timeAgo = getTimeAgo(eventTime);
-              const isStatusChange = event.status !== lastStatus;
-              
-              events.push({
-                ...event,
-                timeAgo,
-                isStatusChange,
-              });
-              
-              lastStatus = event.status;
-            });
-          }
-        } catch (error) {
-          console.error(`Error fetching events for ${agent.hostname}:`, error);
-        }
-      }
-      
-      return events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    },
-    refetchInterval: 10000,
-  });
-
-  // Fetch trend data for the selected period
-  const { data: trendData = [] } = useQuery({
-    queryKey: ['trend-data', timeRange],
-    queryFn: async () => {
-      const trends: TrendData[] = [];
-      const days = timeRange === '1d' ? 1 : timeRange === '3d' ? 3 : timeRange === '7d' ? 7 : 30;
-      
-      for (let i = days - 1; i >= 0; i--) {
-        const date = subDays(new Date(), i);
-        const dateStr = format(date, 'yyyy-MM-dd');
-        
-        let totalUptime = 0;
-        let totalDisconnects = 0;
-        let totalResponseTime = 0;
-        let agentCount = 0;
-        
-        for (const agent of agents) {
-          try {
-            const [disconnectResponse, agentResponse] = await Promise.all([
-              fetch(`/api/agents/${agent.hostname}/working-hours-disconnections?date=${dateStr}`),
-              fetch(`/api/agents/${agent.hostname}`)
-            ]);
-            
-            if (disconnectResponse.ok && agentResponse.ok) {
-              const disconnectData = await disconnectResponse.json();
-              const agentData = await agentResponse.json();
-              
-              totalDisconnects += disconnectData.disconnections || 0;
-              totalUptime += agentData.agent?.uptimePercentage || 0;
-              totalResponseTime += agentData.agent?.avgResponseTime || 0;
-              agentCount++;
-            }
-          } catch (error) {
-            console.error(`Error fetching trend data for ${agent.hostname}:`, error);
-          }
-        }
-        
-        if (agentCount > 0) {
-          trends.push({
-            date: format(date, 'MMM dd'),
-            uptime: Math.round(totalUptime / agentCount),
-            disconnects: totalDisconnects,
-            avgResponseTime: Math.round(totalResponseTime / agentCount),
-            stability: Math.max(0, 100 - (totalDisconnects * 10)) // Simple stability metric
-          });
-        }
-      }
-      
-      return trends;
-    },
-    refetchInterval: 30000,
-  });
-
-  // Generate uptime segments for visualization
-  const { data: uptimeSegments = [] } = useQuery({
-    queryKey: ['uptime-segments', selectedDate, selectedAgent],
-    queryFn: async () => {
-      const segments: UptimeSegment[] = [];
-      const targetAgents = selectedAgent === 'all' ? agents : agents.filter(a => a.hostname === selectedAgent);
-      
-      for (const agent of targetAgents) {
-        try {
-          const response = await fetch(`/api/agents/${agent.hostname}/events?date=${format(selectedDate, 'yyyy-MM-dd')}`);
-          if (response.ok) {
-            const events: AgentEvent[] = await response.json();
-            const dayStart = startOfDay(selectedDate);
-            const dayEnd = endOfDay(selectedDate);
-            
-            // Create segments based on status changes
-            let currentStatus = 'connected';
-            let segmentStart = dayStart;
-            
-            events.forEach(event => {
-              const eventTime = new Date(event.timestamp);
-              
-              if (event.status !== currentStatus) {
-                // Close current segment
-                segments.push({
-                  start: segmentStart.toISOString(),
-                  end: eventTime.toISOString(),
-                  status: currentStatus as 'connected' | 'disconnected',
-                  duration: differenceInMinutes(eventTime, segmentStart),
-                  agent: agent.hostname
-                });
-                
-                // Start new segment
-                currentStatus = event.status;
-                segmentStart = eventTime;
-              }
-            });
-            
-            // Close final segment
-            segments.push({
-              start: segmentStart.toISOString(),
-              end: dayEnd.toISOString(),
-              status: currentStatus as 'connected' | 'disconnected',
-              duration: differenceInMinutes(dayEnd, segmentStart),
-              agent: agent.hostname
-            });
-          }
-        } catch (error) {
-          console.error(`Error fetching uptime data for ${agent.hostname}:`, error);
-        }
-      }
-      
-      return segments;
-    },
-    refetchInterval: 15000,
-  });
+  const handleRefresh = () => {
+    setIsLoading(true);
+    setTimeout(() => {
+      setTimelineEvents(mockTimelineEvents);
+      setTrendData(mockTrendData);
+      setUptimeSegments(mockUptimeSegments);
+      setIsLoading(false);
+    }, 1000);
+  };
 
   const getTimeAgo = (date: Date): string => {
     const now = new Date();
-    const diffMinutes = differenceInMinutes(now, date);
+    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
     
-    if (diffMinutes < 1) return 'Just now';
-    if (diffMinutes < 60) return `${diffMinutes}m ago`;
-    if (diffMinutes < 1440) return `${Math.floor(diffMinutes / 60)}h ago`;
-    return format(date, 'MMM dd, HH:mm');
+    if (diffInSeconds < 60) return `${diffInSeconds}s ago`;
+    if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+    if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+    return `${Math.floor(diffInSeconds / 86400)}d ago`;
   };
 
-  const getEventIcon = (status: string, isStatusChange: boolean) => {
-    if (!isStatusChange) return <Activity className="h-4 w-4 text-gray-400" />;
-    
-    switch (status) {
-      case 'connected':
-        return <Zap className="h-4 w-4 text-green-500" />;
-      case 'disconnected':
-        return <TrendingDown className="h-4 w-4 text-red-500" />;
-      default:
-        return <Minus className="h-4 w-4 text-gray-500" />;
-    }
-  };
+  const filteredEvents = selectedAgent === 'all' 
+    ? timelineEvents 
+    : timelineEvents.filter(event => event.hostname === selectedAgent);
 
-  const getEventColor = (status: string, isStatusChange: boolean) => {
-    if (!isStatusChange) return 'border-gray-200 bg-gray-50';
-    
-    switch (status) {
-      case 'connected':
-        return 'border-green-200 bg-green-50';
-      case 'disconnected':
-        return 'border-red-200 bg-red-50';
-      default:
-        return 'border-gray-200 bg-gray-50';
-    }
-  };
-
-  const renderTimelineView = () => (
-    <div className="space-y-6">
-      {/* Timeline Events */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <History className="h-5 w-5" />
-            Event Timeline
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ScrollArea className="h-96">
-            <div className="space-y-4">
-              {timelineEvents.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  No events found for the selected criteria
-                </div>
-              ) : (
-                timelineEvents.map((event, index) => (
-                  <motion.div
-                    key={event.id}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: index * 0.05 }}
-                    className={`flex items-center p-4 rounded-lg border ${getEventColor(event.status, event.isStatusChange)}`}
-                  >
-                    <div className="flex-shrink-0 mr-4">
-                      {getEventIcon(event.status, event.isStatusChange)}
-                    </div>
-                    <div className="flex-grow">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-sm">
-                            {event.hostname}
-                            {event.isStatusChange && (
-                              <Badge className="ml-2" variant={event.status === 'connected' ? 'default' : 'destructive'}>
-                                {event.status}
-                              </Badge>
-                            )}
-                          </p>
-                          <p className="text-xs text-gray-600">
-                            {event.adapterName && `${event.adapterName} • `}
-                            {event.connectionType}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-xs text-gray-500">{event.timeAgo}</p>
-                          <p className="text-xs text-gray-400">
-                            {format(new Date(event.timestamp), 'HH:mm:ss')}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </motion.div>
-                ))
-              )}
-            </div>
-          </ScrollArea>
-        </CardContent>
-      </Card>
-    </div>
-  );
-
-  const renderTrendsView = () => (
-    <div className="space-y-6">
-      {/* Trend Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="h-5 w-5" />
-              Uptime Trend
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={200}>
-              <AreaChart data={trendData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis domain={[0, 100]} />
-                <Tooltip formatter={(value) => [`${value}%`, 'Uptime']} />
-                <Area type="monotone" dataKey="uptime" stroke="#10b981" fill="#10b981" fillOpacity={0.3} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Activity className="h-5 w-5" />
-              Disconnect Incidents
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={trendData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip formatter={(value) => [value, 'Incidents']} />
-                <Line type="monotone" dataKey="disconnects" stroke="#ef4444" strokeWidth={2} />
-              </LineChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Stability Metrics */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Network Stability Metrics</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={trendData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" />
-              <YAxis />
-              <Tooltip 
-                formatter={(value, name) => [
-                  name === 'stability' ? `${value}%` : 
-                  name === 'avgResponseTime' ? `${value}ms` : value,
-                  name === 'stability' ? 'Stability' : 
-                  name === 'avgResponseTime' ? 'Response Time' : name
-                ]}
-              />
-              <Area type="monotone" dataKey="stability" stackId="1" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.6} />
-              <Area type="monotone" dataKey="avgResponseTime" stackId="2" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.4} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
-    </div>
-  );
-
-  const renderUptimeView = () => (
-    <div className="space-y-6">
-      {/* Uptime Visualization */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Clock className="h-5 w-5" />
-            Daily Uptime Timeline
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {agents.map(agent => {
-              const agentSegments = uptimeSegments.filter(s => s.agent === agent.hostname);
-              const totalMinutes = 24 * 60;
-              
-              return (
-                <div key={agent.hostname} className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-medium text-sm">{agent.hostname}</h4>
-                    <div className="flex items-center gap-2">
-                      <Badge variant={agent.status === 'connected' ? 'default' : 'destructive'}>
-                        {agent.status}
-                      </Badge>
-                    </div>
-                  </div>
-                  <div className="h-8 bg-gray-100 rounded-lg overflow-hidden flex">
-                    {agentSegments.map((segment, index) => (
-                      <div
-                        key={index}
-                        className={`h-full ${
-                          segment.status === 'connected' ? 'bg-green-500' : 'bg-red-500'
-                        }`}
-                        style={{ width: `${(segment.duration / totalMinutes) * 100}%` }}
-                        title={`${segment.status} for ${segment.duration} minutes`}
-                      />
-                    ))}
-                  </div>
-                  <div className="flex justify-between text-xs text-gray-500">
-                    <span>00:00</span>
-                    <span>12:00</span>
-                    <span>23:59</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
+  const filteredTrendData = selectedAgent === 'all' 
+    ? trendData 
+    : trendData.filter(trend => trend.date.includes(selectedAgent));
 
   return (
     <div className="space-y-6">
-      {/* Controls */}
-      <Card>
-        <CardContent className="p-6">
-          <div className="flex flex-wrap items-center gap-4">
-            {/* Date Picker */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Date</label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-64 justify-start text-left font-normal">
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {format(selectedDate, 'PPP')}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0">
-                  <Calendar
-                    mode="single"
-                    selected={selectedDate}
-                    onSelect={(date) => date && setSelectedDate(date)}
-                    initialFocus
-                  />
-                </PopoverContent>
-              </Popover>
-            </div>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold">Network History</h2>
+          <p className="text-gray-600">Timeline of network events and connectivity patterns</p>
+        </div>
+        <div className="flex space-x-2">
+          <Button onClick={handleRefresh} variant="outline" size="sm" disabled={isLoading}>
+            <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </div>
+      </div>
 
-            {/* Agent Filter */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Agent</label>
-              <Select value={selectedAgent} onValueChange={setSelectedAgent}>
-                <SelectTrigger className="w-48">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Agents</SelectItem>
+      <Tabs defaultValue="timeline" className="w-full">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="timeline">Timeline</TabsTrigger>
+          <TabsTrigger value="trends">Trends</TabsTrigger>
+          <TabsTrigger value="uptime">Uptime</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="timeline" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <Clock className="h-5 w-5" />
+                <span>Recent Events</span>
+              </CardTitle>
+              <CardDescription>
+                Latest network connectivity events across all agents
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="mb-4">
+                <select 
+                  value={selectedAgent} 
+                  onChange={(e) => setSelectedAgent(e.target.value)}
+                  className="px-3 py-2 border rounded-md"
+                >
+                  <option value="all">All Agents</option>
                   {agents.map(agent => (
-                    <SelectItem key={agent.hostname} value={agent.hostname}>
+                    <option key={agent.hostname} value={agent.hostname}>
                       {agent.hostname}
-                    </SelectItem>
+                    </option>
                   ))}
-                </SelectContent>
-              </Select>
-            </div>
+                </select>
+              </div>
 
-            {/* Time Range */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Time Range</label>
-              <Select value={timeRange} onValueChange={(value: any) => setTimeRange(value)}>
-                <SelectTrigger className="w-32">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="1d">1 Day</SelectItem>
-                  <SelectItem value="3d">3 Days</SelectItem>
-                  <SelectItem value="7d">7 Days</SelectItem>
-                  <SelectItem value="30d">30 Days</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+              <ScrollArea className="h-96 w-full">
+                <div className="space-y-4">
+                  {filteredEvents.map((event, index) => (
+                    <div key={event.id} className="flex items-start space-x-4 p-3 rounded-lg bg-gray-50">
+                      <div className="flex-shrink-0 mt-1">
+                        {event.status === 'connected' ? (
+                          <CheckCircle className="h-5 w-5 text-green-500" />
+                        ) : (
+                          <AlertCircle className="h-5 w-5 text-red-500" />
+                        )}
+                      </div>
+                      
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center space-x-2 mb-1">
+                          <Badge variant={event.status === 'connected' ? 'default' : 'destructive'}>
+                            {event.status}
+                          </Badge>
+                          <span className="text-sm font-medium">{event.hostname}</span>
+                          <span className="text-xs text-gray-500">{event.timeAgo}</span>
+                        </div>
+                        
+                        <div className="text-sm text-gray-600">
+                          {event.connectionType && (
+                            <span className="mr-4">
+                              Connection: {event.connectionType}
+                            </span>
+                          )}
+                          {event.adapterName && (
+                            <span>
+                              Adapter: {event.adapterName}
+                            </span>
+                          )}
+                        </div>
+                        
+                        {event.duration && (
+                          <div className="text-xs text-gray-500 mt-1">
+                            Duration: {Math.round(event.duration / 60)} minutes
+                          </div>
+                        )}
+                      </div>
+                      
+                      <div className="text-xs text-gray-500 text-right">
+                        {format(new Date(event.timestamp), 'MMM dd, HH:mm')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-            {/* View Mode */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium">View</label>
-              <Select value={viewMode} onValueChange={(value: any) => setViewMode(value)}>
-                <SelectTrigger className="w-32">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="timeline">Timeline</SelectItem>
-                  <SelectItem value="trends">Trends</SelectItem>
-                  <SelectItem value="uptime">Uptime</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+        <TabsContent value="trends" className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center space-x-2">
+                  <TrendingUp className="h-5 w-5" />
+                  <span>Uptime Trends</span>
+                </CardTitle>
+                <CardDescription>7-day uptime percentage</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={250}>
+                  <LineChart data={filteredTrendData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis domain={[0, 100]} />
+                    <Tooltip formatter={(value) => [`${value}%`, 'Uptime']} />
+                    <Line 
+                      type="monotone" 
+                      dataKey="uptime" 
+                      stroke="#10B981" 
+                      strokeWidth={2}
+                      dot={{ fill: '#10B981', strokeWidth: 2 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center space-x-2">
+                  <Activity className="h-5 w-5" />
+                  <span>Daily Disconnections</span>
+                </CardTitle>
+                <CardDescription>Number of disconnections per day</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={250}>
+                  <BarChart data={filteredTrendData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip />
+                    <Bar dataKey="disconnects" fill="#EF4444" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
           </div>
-        </CardContent>
-      </Card>
 
-      {/* Render selected view */}
-      {viewMode === 'timeline' && renderTimelineView()}
-      {viewMode === 'trends' && renderTrendsView()}
-      {viewMode === 'uptime' && renderUptimeView()}
+          <Card>
+            <CardHeader>
+              <CardTitle>Stability Score</CardTitle>
+              <CardDescription>Overall network stability over time</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={filteredTrendData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" />
+                  <YAxis domain={[0, 100]} />
+                  <Tooltip formatter={(value) => [`${value}%`, 'Stability']} />
+                  <Line 
+                    type="monotone" 
+                    dataKey="stability" 
+                    stroke="#3B82F6" 
+                    strokeWidth={2}
+                    dot={{ fill: '#3B82F6', strokeWidth: 2 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="uptime" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Uptime Visualization</CardTitle>
+              <CardDescription>Visual representation of uptime/downtime periods</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="flex items-center space-x-4 text-sm">
+                  <div className="flex items-center space-x-2">
+                    <div className="w-4 h-4 bg-green-500 rounded"></div>
+                    <span>Connected</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <div className="w-4 h-4 bg-red-500 rounded"></div>
+                    <span>Disconnected</span>
+                  </div>
+                </div>
+                
+                <ScrollArea className="h-64 w-full">
+                  <div className="space-y-3">
+                    {uptimeSegments.map((segment, index) => (
+                      <div key={index} className="flex items-center space-x-4 p-2 rounded-md bg-gray-50">
+                        <div className="flex-shrink-0 w-20 text-sm font-medium">
+                          {segment.agent}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2 mb-1">
+                            <div 
+                              className={`w-4 h-4 rounded ${
+                                segment.status === 'connected' ? 'bg-green-500' : 'bg-red-500'
+                              }`}
+                            />
+                            <span className="text-sm font-medium capitalize">{segment.status}</span>
+                          </div>
+                          <div className="text-xs text-gray-600">
+                            {format(new Date(segment.start), 'MMM dd, HH:mm')} - {format(new Date(segment.end), 'MMM dd, HH:mm')}
+                          </div>
+                        </div>
+                        <div className="text-sm text-gray-600">
+                          {Math.round(segment.duration / 60)} min
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
